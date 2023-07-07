@@ -51,7 +51,7 @@ class Model(nn.Module):
     def embed(self, ts, linear):
         embedding = 30 * torch.outer(ts, self.embedding_w)
         embedding = torch.cat([torch.sin(embedding), torch.cos(embedding)], dim=1)
-        embedding = linear(embedding)
+        embedding = self.act(linear(embedding))
         embedding = embedding.reshape(*embedding.shape, 1, 1)
 
         return embedding
