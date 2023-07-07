@@ -9,6 +9,7 @@ class NoiseScheduler:
         self.alpha_bar_s = torch.cumprod(self.alphas, dim=0)
         self.sqrt_alpha_bar_s = torch.sqrt(self.alpha_bar_s)
         self.sqrt_oneminus_alpha_bar_s = torch.sqrt(1 - self.alpha_bar_s)
+        self.sigmas = torch.sqrt(self.betas)
 
     def forward_process(self, xs, ts):
         noise = torch.randn_like(xs)

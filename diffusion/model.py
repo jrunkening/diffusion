@@ -105,3 +105,24 @@ class Model(nn.Module):
         h = self.nt1(h)
 
         return h
+
+    def prev(self, image, t):
+        t = t * torch.ones(1, dtype=torch.int32)
+
+        alpha = self.noise_scheduler.alphas[t]
+        sqrt_oneminus_alpha_bar = self.noise_scheduler.sqrt_oneminus_alpha_bar_s[t]
+        sigma = self.noise_scheduler.sigmas[t]
+        return (
+            image - \
+            ((1 - alpha) / torch.sqrt(1 - sqrt_oneminus_alpha_bar)) * self(image, t)
+        ) / torch.sqrt(alpha) + sigma * torch.randn(1, 3, 218, 178)
+
+    def infer(self, y_size, x_size):
+        image = torch.randn(1, 3, y_size, x_size)
+        for i in range(self.noise_scheduler.steps-1, -1, -1):
+            image = self.prev(image, 499)
+        image = image.reshape(3, 218, 178).permute(1, 2, 0).detach()
+        image -= torch.min(image)
+        image /= torch.max(image)
+
+        return image

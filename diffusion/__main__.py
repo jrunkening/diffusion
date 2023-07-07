@@ -72,10 +72,10 @@ def main(on_gpu=True):
     train_dataloader = DataLoader(training_data, batch_size=512, shuffle=True)
     test_dataloader = DataLoader(test_data, batch_size=512, shuffle=True)
 
-    model = Model(NoiseScheduler(0, 0.02, 500)).to(device)
-    learning_rate = 1e-3
+    model = Model(NoiseScheduler(0, 0.02, 1000)).to(device)
+    learning_rate = 2e-4
     loss_fn = nn.MSELoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     epochs = 500
     for t in range(epochs):
