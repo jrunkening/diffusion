@@ -4,6 +4,8 @@
         "celeba",
         "convt",
         "cumprod",
+        "dtype",
+        "figsize",
         "GELU",
         "imshow",
         "matplotlib",

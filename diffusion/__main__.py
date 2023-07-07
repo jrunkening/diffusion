@@ -59,14 +59,12 @@ def main(on_gpu=True):
     training_data = datasets.CelebA(
         root=DATA_PATH,
         split="train",
-        # target_type=[],
         transform=transforms.ToTensor(),
         download=True
     )
     test_data = datasets.CelebA(
         root=DATA_PATH,
         split="test",
-        # target_type=[],
         transform=transforms.ToTensor(),
         download=True
     )
@@ -79,11 +77,12 @@ def main(on_gpu=True):
     loss_fn = nn.MSELoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
 
-    epochs = 100
+    epochs = 500
     for t in range(epochs):
         print(f"Epoch {t+1}\n-------------------------------")
         train_loop(train_dataloader, model, loss_fn, optimizer, device)
         test_loop(test_dataloader, model, loss_fn, device)
+        torch.save(model, Path(__file__).parent.joinpath(f"../model/model{str(t).rjust(3, '0')}.pth"))
     print("Done!")
 
 
