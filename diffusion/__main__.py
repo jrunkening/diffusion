@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import torch
 from torchvision import datasets, transforms
@@ -8,6 +9,7 @@ from diffusion.model import Model
 
 
 DATA_PATH = Path(__file__).parent.joinpath("../data")
+MODEL_PATH = Path(__file__).parent.joinpath("../model")
 
 
 def train_loop(dataloader, model, loss_fn, optimizer, device):
@@ -52,6 +54,8 @@ def test_loop(dataloader, model, loss_fn, device):
     test_loss /= num_batches
     print(f"Test Error: \n Avg loss: {test_loss:>8f} \n")
 
+    return test_loss
+
 
 def main(on_gpu=True):
     device = "cuda" if on_gpu and torch.cuda.is_available() else "cpu"
@@ -72,7 +76,8 @@ def main(on_gpu=True):
     train_dataloader = DataLoader(training_data, batch_size=512, shuffle=True)
     test_dataloader = DataLoader(test_data, batch_size=512, shuffle=True)
 
-    model = Model(NoiseScheduler(0, 0.02, 1000)).to(device)
+    # model = Model(NoiseScheduler(0, 0.02, 1000)).to(device)
+    model = torch.load(MODEL_PATH.joinpath(os.listdir(MODEL_PATH, )[-1]))
     learning_rate = 2e-4
     loss_fn = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -81,8 +86,9 @@ def main(on_gpu=True):
     for t in range(epochs):
         print(f"Epoch {t+1}\n-------------------------------")
         train_loop(train_dataloader, model, loss_fn, optimizer, device)
-        test_loop(test_dataloader, model, loss_fn, device)
-        torch.save(model, Path(__file__).parent.joinpath(f"../model/model{str(t).rjust(3, '0')}.pth"))
+        test_loss = test_loop(test_dataloader, model, loss_fn, device)
+        torch.save(model, MODEL_PATH.joinpath(f"model{str(t).rjust(3, '0')}.pth"))
+
     print("Done!")
 
 
