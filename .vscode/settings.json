@@ -9,10 +9,12 @@
         "GELU",
         "imshow",
         "matplotlib",
+        "neuralop",
         "oneminus",
         "optim",
         "pyplot",
         "randn",
+        "scalings",
         "torchvision"
     ]
 }

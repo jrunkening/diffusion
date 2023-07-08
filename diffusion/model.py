@@ -11,7 +11,7 @@ class Model(nn.Module):
 
         self.noise_scheduler = noise_scheduler
 
-        self.channels = [3, 16, 32, 64, 128]
+        self.channels = [3, 16, 32, 64, 128, 256]
         self.act = nn.GELU()
 
         self.conv1 = nn.Conv2d(self.channels[0], self.channels[1], (3, 3), padding=(1, 1))
@@ -30,8 +30,14 @@ class Model(nn.Module):
         self.d4 = nn.Linear(256, self.channels[4])
         self.pool4 = nn.MaxPool2d((2, 2))
         self.n4 = nn.GroupNorm(32, self.channels[4])
+        self.conv5 = nn.Conv2d(self.channels[4], self.channels[5], (3, 3), padding=(1, 1))
+        self.d5 = nn.Linear(256, self.channels[5])
+        self.n5 = nn.GroupNorm(32, self.channels[5])
 
-        self.up4 = nn.ConvTranspose2d(self.channels[4], self.channels[3], (2, 2), stride=(2, 2))
+        self.dt5 = nn.Linear(256, self.channels[4])
+        self.convt5 = nn.ConvTranspose2d(self.channels[5], self.channels[4], (3, 3), padding=(1, 1))
+        self.nt5 = nn.GroupNorm(32, self.channels[4])
+        self.up4 = nn.ConvTranspose2d(2*self.channels[4], self.channels[3], (2, 2), stride=(2, 2))
         self.dt4 = nn.Linear(256, self.channels[3])
         self.convt4 = nn.ConvTranspose2d(self.channels[3], self.channels[3], (3, 3), padding=(1, 1))
         self.nt4 = nn.GroupNorm(32, self.channels[3])
@@ -81,8 +87,18 @@ class Model(nn.Module):
         h4 = self.n4(h4)
         h4 = self.act(h4)
 
+        h5 = self.conv5(h4)
+        h5 += self.embed(ts, self.d5)
+        h5 = self.n5(h5)
+        h5 = self.act(h5)
 
-        h = self.up4(h4)
+
+        h = self.convt5(h5)
+        h += self.embed(ts, self.dt5)
+        h = self.nt5(h)
+        h = self.act(h)
+
+        h = self.up4(torch.cat((h, h4), dim=1))
         h += self.embed(ts, self.dt4)
         h = self.convt4(h)
         h = self.nt4(h)
@@ -120,7 +136,7 @@ class Model(nn.Module):
     def infer(self, y_size, x_size):
         image = torch.randn(1, 3, y_size, x_size)
         for i in range(self.noise_scheduler.steps-1, -1, -1):
-            image = self.prev(image, 499)
+            image = self.prev(image, i)
         image = image.reshape(3, 218, 178).permute(1, 2, 0).detach()
         image -= torch.min(image)
         image /= torch.max(image)

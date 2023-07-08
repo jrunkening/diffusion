@@ -4,12 +4,33 @@ import torch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from torch import nn
-from diffusion.noise_scheduler import NoiseScheduler
+from diffusion.noise_scheduler import NOISE_SCHEDULER
 from diffusion.model import Model
+from neuralop.models import UNO
 
 
 DATA_PATH = Path(__file__).parent.joinpath("../data")
 MODEL_PATH = Path(__file__).parent.joinpath("../model")
+
+
+def preprocess(xs):
+    ts = torch.randint(1, NOISE_SCHEDULER.steps, (len(xs),))
+    xs, ys = NOISE_SCHEDULER.forward_process(xs, ts)
+
+    y_pos = torch.ones(xs.shape[0], 1, *xs.shape[2:])
+    x_pos = torch.ones(xs.shape[0], 1, *xs.shape[2:])
+    t_pos = torch.ones(xs.shape[0], 1, *xs.shape[2:])
+    for i in range(xs.shape[2]):
+        y_pos[:, :, i, :] *= i
+    for i in range(xs.shape[3]):
+        x_pos[:, :, :, i] *= i
+    for i, t in enumerate(ts):
+        t_pos[i, :, :, :] *= t
+    xs = torch.cat((xs, y_pos), dim=1)
+    xs = torch.cat((xs, x_pos), dim=1)
+    xs = torch.cat((xs, t_pos), dim=1)
+
+    return xs, ys
 
 
 def train_loop(dataloader, model, loss_fn, optimizer, device):
@@ -18,12 +39,11 @@ def train_loop(dataloader, model, loss_fn, optimizer, device):
     model.train()
     for batch, (xs, _) in enumerate(dataloader):
         # add noise
-        ts = torch.randint(1, model.noise_scheduler.steps, (len(xs),))
-        xs, ys = model.noise_scheduler.forward_process(xs, ts)
+        xs, ys = preprocess(xs)
 
         # calculate loss
-        xs, ts, ys = xs.to(device), ts.to(device), ys.to(device)
-        loss = loss_fn(model(xs, ts), ys)
+        xs, ys = xs.to(device), ys.to(device)
+        loss = loss_fn(model(xs), ys)
 
         # back propagation
         loss.backward()
@@ -44,12 +64,11 @@ def test_loop(dataloader, model, loss_fn, device):
     with torch.no_grad():
         for xs, _ in dataloader:
             # add noise
-            ts = torch.randint(1, model.noise_scheduler.steps, (len(xs),))
-            xs, ys = model.noise_scheduler.forward_process(xs, ts)
+            xs, ys = preprocess(xs)
 
             # calculate loss
-            xs, ts, ys = xs.to(device), ts.to(device), ys.to(device)
-            test_loss += loss_fn(model(xs, ts), ys).item()
+            xs, ys = xs.to(device), ys.to(device)
+            test_loss += loss_fn(model(xs), ys).item()
 
     test_loss /= num_batches
     print(f"Test Error: \n Avg loss: {test_loss:>8f} \n")
@@ -73,12 +92,22 @@ def main(on_gpu=True):
         download=True
     )
 
-    train_dataloader = DataLoader(training_data, batch_size=512, shuffle=True)
-    test_dataloader = DataLoader(test_data, batch_size=512, shuffle=True)
+    train_dataloader = DataLoader(training_data, batch_size=64, shuffle=True)
+    test_dataloader = DataLoader(test_data, batch_size=64, shuffle=True)
 
-    # model = Model(NoiseScheduler(0, 0.02, 1000)).to(device)
-    model = torch.load(MODEL_PATH.joinpath(os.listdir(MODEL_PATH, )[-1]))
-    learning_rate = 2e-4
+    model = UNO(
+        in_channels=6,
+        out_channels=3,
+        hidden_channels=128,
+        lifting_channels=256,
+        projection_channels=256,
+        n_layers=4,
+        uno_out_channels=[64, 32, 32, 64],
+        uno_n_modes=[[128, 128], [128, 128], [128, 128], [128, 128]],
+        uno_scalings=[[1, 1], [1, 1], [1, 1], [1, 1]],
+    ).to(device)
+    # model = torch.load(MODEL_PATH.joinpath(os.listdir(MODEL_PATH, )[-1]))
+    learning_rate = 1e-4
     loss_fn = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -86,8 +115,8 @@ def main(on_gpu=True):
     for t in range(epochs):
         print(f"Epoch {t+1}\n-------------------------------")
         train_loop(train_dataloader, model, loss_fn, optimizer, device)
-        test_loss = test_loop(test_dataloader, model, loss_fn, device)
-        torch.save(model, MODEL_PATH.joinpath(f"model{str(t).rjust(3, '0')}.pth"))
+        test_loop(test_dataloader, model, loss_fn, device)
+        torch.save(model.state_dict(), MODEL_PATH.joinpath("model.pth"))
 
     print("Done!")
 
