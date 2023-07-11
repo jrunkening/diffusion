@@ -1,20 +1,14 @@
 {
     "cSpell.words": [
-        "argmax",
-        "celeba",
-        "convt",
+        "cmap",
         "cumprod",
-        "dtype",
         "figsize",
-        "GELU",
         "imshow",
         "matplotlib",
-        "neuralop",
+        "MNIST",
         "oneminus",
         "optim",
         "pyplot",
-        "randn",
-        "scalings",
         "torchvision"
     ]
 }
