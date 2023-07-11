@@ -1,18 +1,47 @@
 import torch
-from neuralop.models import UNO
 from diffusion.noise_scheduler import NoiseScheduler
 from torch import nn
 
 
+class SelfAttention(nn.Module):
+  def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
+    super().__init__()
+    self.in_channels = in_channels
+    self.out_channels = out_channels
+
+    self.calc_querys = nn.Conv2d(self.in_channels, self.out_channels, kernel_size, stride, padding, bias=False)
+    self.calc_keys = nn.Conv2d(self.in_channels, self.out_channels, kernel_size, stride, padding, bias=False)
+    self.calc_values = nn.Conv2d(self.in_channels, self.out_channels, kernel_size, stride, padding, bias=False)
+
+    self.l = nn.Conv2d(self.in_channels, self.out_channels, kernel_size=1, bias=False)
+
+  def forward(self,xs):
+    n, _, h, w = xs.shape
+
+    querys = self.calc_querys(xs).view(n, self.out_channels, -1)
+    keys = self.calc_keys(xs).view(n, self.out_channels, -1).transpose(2, 1)
+    values = self.calc_values(xs).view(n, self.out_channels, -1)
+
+    attention_scores = keys.bmm(querys)
+    assert attention_scores.shape == (n, h*w, h*w)
+    attention_scores = nn.functional.softmax(attention_scores, dim=-1)
+
+    out = values.bmm(attention_scores).view(n, self.out_channels, h, w) + self.l(xs)
+
+    return out
+
+
 class ResBlock(nn.Module):
-    def __init__(self, shape, in_c, out_c, activation, mode, kernel_size=3, stride=1, padding=1) -> None:
+    def __init__(self, groups, in_c, out_c, activation, mode, kernel_size=3, stride=1, padding=1) -> None:
         super().__init__()
-        self.normalize = nn.LayerNorm((in_c, *shape))
+        self.normalize = nn.GroupNorm(groups, in_c)
         self.Conv = nn.Conv2d if mode == "down" else nn.ConvTranspose2d
 
         self.conv0 = self.Conv(in_c, out_c, kernel_size, stride, padding)
         self.conv1 = self.Conv(out_c, out_c, kernel_size, stride, padding)
         self.conv2 = self.Conv(out_c, out_c, kernel_size, stride, padding)
+        self.conv3 = self.Conv(out_c, out_c, kernel_size, stride, padding)
+        self.conv4 = self.Conv(out_c, out_c, kernel_size, stride, padding)
         self.activation = activation
 
         self.shortcut = self.Conv(in_c, out_c, kernel_size, stride, padding)
@@ -26,6 +55,10 @@ class ResBlock(nn.Module):
         out = self.activation(out)
         out = self.conv2(out)
         out = self.activation(out)
+        out = self.conv3(out)
+        out = self.activation(out)
+        out = self.conv4(out)
+        out = self.activation(out)
 
         out += self.shortcut(xs)
 
@@ -36,75 +69,109 @@ class Model(nn.Module):
     def __init__(self):
         super().__init__()
         self.register_buffer("embedding_w", torch.randn(256//2))
-        self.noise_scheduler = NoiseScheduler(0, 0.02, 1000)
+        self.noise_scheduler = NoiseScheduler(0, 0.01, 1000)
 
-        self.channels = [3, 16, 32, 64, 128]
-        self.activation = nn.SiLU()
+        self.channels = [3, 16, 32, 64, 128, 256]
+        self.activation = nn.GELU()
 
         self.l0 = nn.Linear(256, self.channels[0])
         self.b0 = nn.Sequential(
-            ResBlock((218, 178), self.channels[0], self.channels[1], self.activation, "down"),
-            ResBlock((218, 178), self.channels[1], self.channels[1], self.activation, "down"),
-            ResBlock((218, 178), self.channels[1], self.channels[1], self.activation, "down"),
+            ResBlock(self.channels[0], self.channels[0], self.channels[1], self.activation, "down"),
+            ResBlock(self.channels[1], self.channels[1], self.channels[1], self.activation, "down"),
+            ResBlock(self.channels[1], self.channels[1], self.channels[1], self.activation, "down"),
+            SelfAttention(self.channels[1], self.channels[1]),
+            ResBlock(self.channels[1], self.channels[1], self.channels[1], self.activation, "down"),
         )
-        self.down0 = nn.Conv2d(self.channels[1], self.channels[1], kernel_size=3, stride=2, padding=1)
+        self.down0 = nn.MaxPool2d(2)
 
         self.l1 = nn.Linear(256, self.channels[1])
         self.b1 = nn.Sequential(
-            ResBlock((109, 89), self.channels[1], self.channels[2], self.activation, "down"),
-            ResBlock((109, 89), self.channels[2], self.channels[2], self.activation, "down"),
-            ResBlock((109, 89), self.channels[2], self.channels[2], self.activation, "down"),
+            ResBlock(self.channels[1], self.channels[1], self.channels[2], self.activation, "down"),
+            ResBlock(self.channels[2], self.channels[2], self.channels[2], self.activation, "down"),
+            ResBlock(self.channels[2], self.channels[2], self.channels[2], self.activation, "down"),
+            SelfAttention(self.channels[2], self.channels[2]),
+            ResBlock(self.channels[2], self.channels[2], self.channels[2], self.activation, "down"),
         )
-        self.down1 = nn.Conv2d(self.channels[2], self.channels[2], kernel_size=3, stride=2, padding=1)
+        self.down1 = nn.MaxPool2d(2)
 
         self.l2 = nn.Linear(256, self.channels[2])
         self.b2 = nn.Sequential(
-            ResBlock((55, 45), self.channels[2], self.channels[3], self.activation, "down"),
-            ResBlock((55, 45), self.channels[3], self.channels[3], self.activation, "down"),
-            ResBlock((55, 45), self.channels[3], self.channels[3], self.activation, "down"),
+            ResBlock(self.channels[2], self.channels[2], self.channels[3], self.activation, "down"),
+            ResBlock(self.channels[2], self.channels[3], self.channels[3], self.activation, "down"),
+            ResBlock(self.channels[2], self.channels[3], self.channels[3], self.activation, "down"),
+            SelfAttention(self.channels[3], self.channels[3]),
+            ResBlock(self.channels[2], self.channels[3], self.channels[3], self.activation, "down"),
         )
-        self.down2 = nn.Conv2d(self.channels[3], self.channels[3], kernel_size=3, stride=2, padding=1)
+        self.down2 = nn.MaxPool2d(2)
 
         self.l3 = nn.Linear(256, self.channels[3])
         self.b3 = nn.Sequential(
-            ResBlock((28, 23), self.channels[3], self.channels[4], self.activation, "down"),
-            ResBlock((28, 23), self.channels[4], self.channels[4], self.activation, "down"),
-            ResBlock((28, 23), self.channels[4], self.channels[4], self.activation, "down"),
+            ResBlock(self.channels[2], self.channels[3], self.channels[4], self.activation, "down"),
+            ResBlock(self.channels[2], self.channels[4], self.channels[4], self.activation, "down"),
+            ResBlock(self.channels[2], self.channels[4], self.channels[4], self.activation, "down"),
+            SelfAttention(self.channels[4], self.channels[4]),
+            ResBlock(self.channels[2], self.channels[4], self.channels[4], self.activation, "down"),
         )
-        self.down3 = nn.Conv2d(self.channels[4], self.channels[4], kernel_size=3, stride=2, padding=1)
+        self.down3 = nn.MaxPool2d(2)
 
+        self.l4 = nn.Linear(256, self.channels[4])
+        self.b4 = nn.Sequential(
+            ResBlock(self.channels[2], self.channels[4], self.channels[5], self.activation, "down"),
+            ResBlock(self.channels[2], self.channels[5], self.channels[5], self.activation, "down"),
+            ResBlock(self.channels[2], self.channels[5], self.channels[5], self.activation, "down"),
+            SelfAttention(self.channels[5], self.channels[5]),
+            ResBlock(self.channels[2], self.channels[5], self.channels[5], self.activation, "down"),
+        )
+
+
+        self.lt4 = nn.Linear(256, self.channels[5])
+        self.bt4 = nn.Sequential(
+            ResBlock(self.channels[2], self.channels[5], self.channels[4], self.activation, "up"),
+            SelfAttention(self.channels[4], self.channels[4]),
+            ResBlock(self.channels[2], self.channels[4], self.channels[4], self.activation, "up"),
+            ResBlock(self.channels[2], self.channels[4], self.channels[4], self.activation, "up"),
+            ResBlock(self.channels[2], self.channels[4], self.channels[4], self.activation, "up"),
+        )
 
         self.lt3 = nn.Linear(256, self.channels[4])
         self.bt3 = nn.Sequential(
-            ResBlock((14, 12), self.channels[4], self.channels[3], self.activation, "up"),
-            ResBlock((14, 12), self.channels[3], self.channels[3], self.activation, "up"),
-            ResBlock((14, 12), self.channels[3], self.channels[3], self.activation, "up"),
+            ResBlock(self.channels[2], 2*self.channels[4], self.channels[3], self.activation, "up"),
+            SelfAttention(self.channels[3], self.channels[3]),
+            ResBlock(self.channels[2], self.channels[3], self.channels[3], self.activation, "up"),
+            ResBlock(self.channels[2], self.channels[3], self.channels[3], self.activation, "up"),
+            ResBlock(self.channels[2], self.channels[3], self.channels[3], self.activation, "up"),
         )
-        self.up3 = nn.ConvTranspose2d(self.channels[3], self.channels[3], kernel_size=(4, 3), stride=2, padding=1)
+        self.up3 = nn.ConvTranspose2d(self.channels[3], self.channels[3], kernel_size=2, stride=2, padding=0)
 
         self.lt2 = nn.Linear(256, self.channels[3])
         self.bt2 = nn.Sequential(
-            ResBlock((28, 23), 2*self.channels[3], self.channels[2], self.activation, "up"),
-            ResBlock((28, 23), self.channels[2], self.channels[2], self.activation, "up"),
-            ResBlock((28, 23), self.channels[2], self.channels[2], self.activation, "up"),
+            ResBlock(self.channels[2], 2*self.channels[3], self.channels[2], self.activation, "up"),
+            SelfAttention(self.channels[2], self.channels[2]),
+            ResBlock(self.channels[2], self.channels[2], self.channels[2], self.activation, "up"),
+            ResBlock(self.channels[2], self.channels[2], self.channels[2], self.activation, "up"),
+            ResBlock(self.channels[2], self.channels[2], self.channels[2], self.activation, "up"),
         )
-        self.up2 = nn.ConvTranspose2d(self.channels[2], self.channels[2], kernel_size=3, stride=2, padding=1)
+        self.up2 = nn.ConvTranspose2d(self.channels[2], self.channels[2], kernel_size=2, stride=2, padding=0)
 
         self.lt1 = nn.Linear(256, self.channels[2])
         self.bt1 = nn.Sequential(
-            ResBlock((55, 45), 2*self.channels[2], self.channels[1], self.activation, "up"),
-            ResBlock((55, 45), self.channels[1], self.channels[1], self.activation, "up"),
-            ResBlock((55, 45), self.channels[1], self.channels[1], self.activation, "up"),
+            ResBlock(self.channels[2], 2*self.channels[2], self.channels[1], self.activation, "up"),
+            SelfAttention(self.channels[1], self.channels[1]),
+            ResBlock(self.channels[1], self.channels[1], self.channels[1], self.activation, "up"),
+            ResBlock(self.channels[1], self.channels[1], self.channels[1], self.activation, "up"),
+            ResBlock(self.channels[1], self.channels[1], self.channels[1], self.activation, "up"),
         )
-        self.up1 = nn.ConvTranspose2d(self.channels[1], self.channels[1], kernel_size=3, stride=2, padding=1)
+        self.up1 = nn.ConvTranspose2d(self.channels[1], self.channels[1], kernel_size=2, stride=2, padding=0)
 
         self.lt0 = nn.Linear(256, self.channels[1])
         self.bt0 = nn.Sequential(
-            ResBlock((109, 89), 2*self.channels[1], self.channels[0], self.activation, "up"),
-            ResBlock((109, 89), self.channels[0], self.channels[0], self.activation, "up"),
-            ResBlock((109, 89), self.channels[0], self.channels[0], self.activation, "up"),
+            ResBlock(self.channels[1], 2*self.channels[1], self.channels[0], self.activation, "up"),
+            SelfAttention(self.channels[0], self.channels[0]),
+            ResBlock(self.channels[0], self.channels[0], self.channels[0], self.activation, "up"),
+            ResBlock(self.channels[0], self.channels[0], self.channels[0], self.activation, "up"),
+            ResBlock(self.channels[0], self.channels[0], self.channels[0], self.activation, "up"),
         )
-        self.up0 = nn.ConvTranspose2d(self.channels[0], self.channels[0], kernel_size=4, stride=2, padding=1)
+        self.up0 = nn.ConvTranspose2d(self.channels[0], self.channels[0], kernel_size=2, stride=2, padding=0)
 
     def preprocess(self, xs):
         ts = torch.randint(1, self.noise_scheduler.steps, (len(xs),))
@@ -125,8 +192,10 @@ class Model(nn.Module):
         h1 = self.down1(self.b1(h0 + self.embed(ts, self.l1)))
         h2 = self.down2(self.b2(h1 + self.embed(ts, self.l2)))
         h3 = self.down3(self.b3(h2 + self.embed(ts, self.l3)))
+        h4 = self.b4(h3 + self.embed(ts, self.l4))
 
-        h = self.up3(self.bt3(h3 + self.embed(ts, self.lt3)))
+        h = self.bt4(h4 + self.embed(ts, self.lt4))
+        h = self.up3(self.bt3(torch.cat((h + self.embed(ts, self.lt3), h3), dim=1)))
         h = self.up2(self.bt2(torch.cat((h + self.embed(ts, self.lt2), h2), dim=1)))
         h = self.up1(self.bt1(torch.cat((h + self.embed(ts, self.lt1), h1), dim=1)))
         h = self.up0(self.bt0(torch.cat((h + self.embed(ts, self.lt0), h0), dim=1)))

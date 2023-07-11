@@ -57,15 +57,15 @@ def test_loop(dataloader, model: Model, loss_fn, device):
 def main(on_gpu=True):
     device = "cuda" if on_gpu and torch.cuda.is_available() else "cpu"
 
-    training_data = datasets.CelebA(
+    training_data = datasets.CIFAR10(
         root=DATA_PATH,
-        split="train",
+        train=True,
         transform=transforms.ToTensor(),
         download=True
     )
-    test_data = datasets.CelebA(
+    test_data = datasets.CIFAR10(
         root=DATA_PATH,
-        split="test",
+        train=False,
         transform=transforms.ToTensor(),
         download=True
     )
