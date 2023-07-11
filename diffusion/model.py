@@ -4,7 +4,7 @@ from torch import nn
 
 
 class SelfAttention(nn.Module):
-  def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
+  def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, padding=0):
     super().__init__()
     self.in_channels = in_channels
     self.out_channels = out_channels
@@ -15,7 +15,7 @@ class SelfAttention(nn.Module):
 
     self.l = nn.Conv2d(self.in_channels, self.out_channels, kernel_size=1, bias=False)
 
-  def forward(self,xs):
+  def forward(self, xs):
     n, _, h, w = xs.shape
 
     querys = self.calc_querys(xs).view(n, self.out_channels, -1)
@@ -32,37 +32,103 @@ class SelfAttention(nn.Module):
 
 
 class ResBlock(nn.Module):
-    def __init__(self, groups, in_c, out_c, activation, mode, kernel_size=3, stride=1, padding=1) -> None:
+    def __init__(
+            self,
+            groups, in_channels, out_channels, activate, mode,
+            kernel_size=3, stride=1, padding=1, drop_rate=0.) -> None:
         super().__init__()
-        self.normalize = nn.GroupNorm(groups, in_c)
         self.Conv = nn.Conv2d if mode == "down" else nn.ConvTranspose2d
 
-        self.conv0 = self.Conv(in_c, out_c, kernel_size, stride, padding)
-        self.conv1 = self.Conv(out_c, out_c, kernel_size, stride, padding)
-        self.conv2 = self.Conv(out_c, out_c, kernel_size, stride, padding)
-        self.conv3 = self.Conv(out_c, out_c, kernel_size, stride, padding)
-        self.conv4 = self.Conv(out_c, out_c, kernel_size, stride, padding)
-        self.activation = activation
+        self.normalize_in = nn.GroupNorm(groups, in_channels)
+        self.conv0 = self.Conv(in_channels, out_channels, kernel_size, stride, padding)
+        self.normalize_out = nn.GroupNorm(groups, out_channels)
+        self.dropout = nn.Dropout(p=drop_rate, inplace=True)
+        self.conv1 = self.Conv(out_channels, out_channels, kernel_size, stride, padding)
+        self.activate = activate
 
-        self.shortcut = self.Conv(in_c, out_c, kernel_size, stride, padding)
+        self.shortcut = self.Conv(in_channels, out_channels, kernel_size, stride, padding)
 
-    def forward(self, xs):
-        xs = self.normalize(xs)
-
-        out = self.conv0(xs)
-        out = self.activation(out)
+    def forward(self, xs, ts_embadding):
+        out = self.activate(self.normalize_in(xs))
+        out = self.conv0(out)
+        out += ts_embadding
+        out = self.dropout(self.activate(self.normalize_out(out)))
         out = self.conv1(out)
-        out = self.activation(out)
-        out = self.conv2(out)
-        out = self.activation(out)
-        out = self.conv3(out)
-        out = self.activation(out)
-        out = self.conv4(out)
-        out = self.activation(out)
 
-        out += self.shortcut(xs)
+        return out + self.shortcut(xs)
 
-        return out
+
+class DownSampling(nn.Module):
+    def __init__(self, group, in_channels, out_channels, activate, Pool, embedding_w) -> None:
+        super().__init__()
+        self.activate = activate
+        self.register_buffer("embedding_w", embedding_w)
+        self.ts_embadding_dim = self.embedding_w.size(0) * 2
+
+        self.l = nn.Linear(self.ts_embadding_dim, out_channels)
+        self.res = ResBlock(group, in_channels, out_channels, activate, "down")
+        self.a = SelfAttention(out_channels, out_channels)
+        self.down = Pool(2)
+
+    def embed(self, ts):
+        embedding = 30 * torch.outer(ts, self.embedding_w)
+        embedding = torch.cat([torch.sin(embedding), torch.cos(embedding)], dim=1)
+        embedding = (self.l(embedding))
+        embedding = embedding.reshape(*embedding.shape, 1, 1)
+
+        return embedding
+
+    def forward(self, xs, ts):
+        return self.down(self.a(self.res(xs, self.embed(ts))))
+
+
+class UpSampling(nn.Module):
+    def __init__(self, group, in_channels, out_channels, activate, embedding_w) -> None:
+        super().__init__()
+        self.activate = activate
+        self.register_buffer("embedding_w", embedding_w)
+        self.ts_embadding_dim = self.embedding_w.size(0) * 2
+
+        self.l = nn.Linear(self.ts_embadding_dim, out_channels)
+        self.res = ResBlock(group, in_channels, out_channels, activate, "up")
+        self.a = SelfAttention(out_channels, out_channels)
+        self.up = nn.ConvTranspose2d(out_channels, out_channels, kernel_size=2, stride=2, padding=0)
+
+    def embed(self, ts):
+        embedding = 30 * torch.outer(ts, self.embedding_w)
+        embedding = torch.cat([torch.sin(embedding), torch.cos(embedding)], dim=1)
+        embedding = (self.l(embedding))
+        embedding = embedding.reshape(*embedding.shape, 1, 1)
+
+        return embedding
+
+    def forward(self, xs, ts):
+        return self.up(self.a(self.res(xs, self.embed(ts))))
+
+
+class Mid(nn.Module):
+    def __init__(self, group, in_channels, out_channels, activate, embedding_w) -> None:
+        super().__init__()
+        self.activate = activate
+        self.register_buffer("embedding_w", embedding_w)
+        self.ts_embadding_dim = self.embedding_w.size(0) * 2
+
+        self.l = nn.Linear(self.ts_embadding_dim, out_channels)
+        self.res0 = ResBlock(group, in_channels, out_channels, activate, "down")
+        self.a = SelfAttention(out_channels, out_channels)
+        self.res1 = ResBlock(group, out_channels, out_channels, activate, "down")
+
+    def embed(self, ts):
+        embedding = 30 * torch.outer(ts, self.embedding_w)
+        embedding = torch.cat([torch.sin(embedding), torch.cos(embedding)], dim=1)
+        embedding = (self.l(embedding))
+        embedding = embedding.reshape(*embedding.shape, 1, 1)
+
+        return embedding
+
+    def forward(self, xs, ts):
+        embedding = self.embed(ts)
+        return self.res1(self.a(self.res0(xs, embedding)), embedding)
 
 
 class Model(nn.Module):
@@ -71,107 +137,22 @@ class Model(nn.Module):
         self.register_buffer("embedding_w", torch.randn(256//2))
         self.noise_scheduler = NoiseScheduler(0, 0.01, 1000)
 
-        self.channels = [3, 16, 32, 64, 128, 256]
-        self.activation = nn.GELU()
+        self.channels = [4, 16, 32, 64, 128, 256, 512]
+        self.activate = nn.SiLU()
+        self.Pool = nn.AvgPool2d
 
-        self.l0 = nn.Linear(256, self.channels[0])
-        self.b0 = nn.Sequential(
-            ResBlock(self.channels[0], self.channels[0], self.channels[1], self.activation, "down"),
-            ResBlock(self.channels[1], self.channels[1], self.channels[1], self.activation, "down"),
-            ResBlock(self.channels[1], self.channels[1], self.channels[1], self.activation, "down"),
-            SelfAttention(self.channels[1], self.channels[1]),
-            ResBlock(self.channels[1], self.channels[1], self.channels[1], self.activation, "down"),
-        )
-        self.down0 = nn.MaxPool2d(2)
-
-        self.l1 = nn.Linear(256, self.channels[1])
-        self.b1 = nn.Sequential(
-            ResBlock(self.channels[1], self.channels[1], self.channels[2], self.activation, "down"),
-            ResBlock(self.channels[2], self.channels[2], self.channels[2], self.activation, "down"),
-            ResBlock(self.channels[2], self.channels[2], self.channels[2], self.activation, "down"),
-            SelfAttention(self.channels[2], self.channels[2]),
-            ResBlock(self.channels[2], self.channels[2], self.channels[2], self.activation, "down"),
-        )
-        self.down1 = nn.MaxPool2d(2)
-
-        self.l2 = nn.Linear(256, self.channels[2])
-        self.b2 = nn.Sequential(
-            ResBlock(self.channels[2], self.channels[2], self.channels[3], self.activation, "down"),
-            ResBlock(self.channels[2], self.channels[3], self.channels[3], self.activation, "down"),
-            ResBlock(self.channels[2], self.channels[3], self.channels[3], self.activation, "down"),
-            SelfAttention(self.channels[3], self.channels[3]),
-            ResBlock(self.channels[2], self.channels[3], self.channels[3], self.activation, "down"),
-        )
-        self.down2 = nn.MaxPool2d(2)
-
-        self.l3 = nn.Linear(256, self.channels[3])
-        self.b3 = nn.Sequential(
-            ResBlock(self.channels[2], self.channels[3], self.channels[4], self.activation, "down"),
-            ResBlock(self.channels[2], self.channels[4], self.channels[4], self.activation, "down"),
-            ResBlock(self.channels[2], self.channels[4], self.channels[4], self.activation, "down"),
-            SelfAttention(self.channels[4], self.channels[4]),
-            ResBlock(self.channels[2], self.channels[4], self.channels[4], self.activation, "down"),
-        )
-        self.down3 = nn.MaxPool2d(2)
-
-        self.l4 = nn.Linear(256, self.channels[4])
-        self.b4 = nn.Sequential(
-            ResBlock(self.channels[2], self.channels[4], self.channels[5], self.activation, "down"),
-            ResBlock(self.channels[2], self.channels[5], self.channels[5], self.activation, "down"),
-            ResBlock(self.channels[2], self.channels[5], self.channels[5], self.activation, "down"),
-            SelfAttention(self.channels[5], self.channels[5]),
-            ResBlock(self.channels[2], self.channels[5], self.channels[5], self.activation, "down"),
-        )
-
-
-        self.lt4 = nn.Linear(256, self.channels[5])
-        self.bt4 = nn.Sequential(
-            ResBlock(self.channels[2], self.channels[5], self.channels[4], self.activation, "up"),
-            SelfAttention(self.channels[4], self.channels[4]),
-            ResBlock(self.channels[2], self.channels[4], self.channels[4], self.activation, "up"),
-            ResBlock(self.channels[2], self.channels[4], self.channels[4], self.activation, "up"),
-            ResBlock(self.channels[2], self.channels[4], self.channels[4], self.activation, "up"),
-        )
-
-        self.lt3 = nn.Linear(256, self.channels[4])
-        self.bt3 = nn.Sequential(
-            ResBlock(self.channels[2], 2*self.channels[4], self.channels[3], self.activation, "up"),
-            SelfAttention(self.channels[3], self.channels[3]),
-            ResBlock(self.channels[2], self.channels[3], self.channels[3], self.activation, "up"),
-            ResBlock(self.channels[2], self.channels[3], self.channels[3], self.activation, "up"),
-            ResBlock(self.channels[2], self.channels[3], self.channels[3], self.activation, "up"),
-        )
-        self.up3 = nn.ConvTranspose2d(self.channels[3], self.channels[3], kernel_size=2, stride=2, padding=0)
-
-        self.lt2 = nn.Linear(256, self.channels[3])
-        self.bt2 = nn.Sequential(
-            ResBlock(self.channels[2], 2*self.channels[3], self.channels[2], self.activation, "up"),
-            SelfAttention(self.channels[2], self.channels[2]),
-            ResBlock(self.channels[2], self.channels[2], self.channels[2], self.activation, "up"),
-            ResBlock(self.channels[2], self.channels[2], self.channels[2], self.activation, "up"),
-            ResBlock(self.channels[2], self.channels[2], self.channels[2], self.activation, "up"),
-        )
-        self.up2 = nn.ConvTranspose2d(self.channels[2], self.channels[2], kernel_size=2, stride=2, padding=0)
-
-        self.lt1 = nn.Linear(256, self.channels[2])
-        self.bt1 = nn.Sequential(
-            ResBlock(self.channels[2], 2*self.channels[2], self.channels[1], self.activation, "up"),
-            SelfAttention(self.channels[1], self.channels[1]),
-            ResBlock(self.channels[1], self.channels[1], self.channels[1], self.activation, "up"),
-            ResBlock(self.channels[1], self.channels[1], self.channels[1], self.activation, "up"),
-            ResBlock(self.channels[1], self.channels[1], self.channels[1], self.activation, "up"),
-        )
-        self.up1 = nn.ConvTranspose2d(self.channels[1], self.channels[1], kernel_size=2, stride=2, padding=0)
-
-        self.lt0 = nn.Linear(256, self.channels[1])
-        self.bt0 = nn.Sequential(
-            ResBlock(self.channels[1], 2*self.channels[1], self.channels[0], self.activation, "up"),
-            SelfAttention(self.channels[0], self.channels[0]),
-            ResBlock(self.channels[0], self.channels[0], self.channels[0], self.activation, "up"),
-            ResBlock(self.channels[0], self.channels[0], self.channels[0], self.activation, "up"),
-            ResBlock(self.channels[0], self.channels[0], self.channels[0], self.activation, "up"),
-        )
-        self.up0 = nn.ConvTranspose2d(self.channels[0], self.channels[0], kernel_size=2, stride=2, padding=0)
+        self.lift = nn.Conv2d(3, self.channels[0], 3, 1, 1)
+        self.down0 = DownSampling(self.channels[0], self.channels[0], self.channels[1], self.activate, self.Pool, self.embedding_w)
+        self.down1 = DownSampling(self.channels[1], self.channels[1], self.channels[2], self.activate, self.Pool, self.embedding_w)
+        self.down2 = DownSampling(self.channels[2], self.channels[2], self.channels[3], self.activate, self.Pool, self.embedding_w)
+        self.down3 = DownSampling(self.channels[2], self.channels[3], self.channels[4], self.activate, self.Pool, self.embedding_w)
+        self.mid0 = Mid(self.channels[2], self.channels[4], self.channels[5], self.activate, self.embedding_w)
+        self.mid1 = Mid(self.channels[2], self.channels[5], self.channels[4], self.activate, self.embedding_w)
+        self.up3 = UpSampling(self.channels[2], 2*self.channels[4], self.channels[3], self.activate, self.embedding_w)
+        self.up2 = UpSampling(self.channels[2], 2*self.channels[3], self.channels[2], self.activate, self.embedding_w)
+        self.up1 = UpSampling(self.channels[1], 2*self.channels[2], self.channels[1], self.activate, self.embedding_w)
+        self.up0 = UpSampling(self.channels[0], 2*self.channels[1], self.channels[0], self.activate, self.embedding_w)
+        self.proj = nn.ConvTranspose2d(self.channels[0], 3, 3, 1, 1)
 
     def preprocess(self, xs):
         ts = torch.randint(1, self.noise_scheduler.steps, (len(xs),))
@@ -179,26 +160,23 @@ class Model(nn.Module):
 
         return xs, ts, ys
 
-    def embed(self, ts, linear):
-        embedding = 30 * torch.outer(ts, self.embedding_w)
-        embedding = torch.cat([torch.sin(embedding), torch.cos(embedding)], dim=1)
-        embedding = self.activation(linear(embedding))
-        embedding = embedding.reshape(*embedding.shape, 1, 1)
-
-        return embedding
-
     def forward(self, xs, ts):
-        h0 = self.down0(self.b0(xs + self.embed(ts, self.l0)))
-        h1 = self.down1(self.b1(h0 + self.embed(ts, self.l1)))
-        h2 = self.down2(self.b2(h1 + self.embed(ts, self.l2)))
-        h3 = self.down3(self.b3(h2 + self.embed(ts, self.l3)))
-        h4 = self.b4(h3 + self.embed(ts, self.l4))
+        xs = self.lift(xs)
 
-        h = self.bt4(h4 + self.embed(ts, self.lt4))
-        h = self.up3(self.bt3(torch.cat((h + self.embed(ts, self.lt3), h3), dim=1)))
-        h = self.up2(self.bt2(torch.cat((h + self.embed(ts, self.lt2), h2), dim=1)))
-        h = self.up1(self.bt1(torch.cat((h + self.embed(ts, self.lt1), h1), dim=1)))
-        h = self.up0(self.bt0(torch.cat((h + self.embed(ts, self.lt0), h0), dim=1)))
+        h0 = self.down0(xs, ts)
+        h1 = self.down1(h0, ts)
+        h2 = self.down2(h1, ts)
+        h3 = self.down3(h2, ts)
+
+        h = self.mid0(h3, ts)
+        h = self.mid1(h, ts)
+
+        h = self.up3(torch.cat((h, h3), dim=1), ts)
+        h = self.up2(torch.cat((h, h2), dim=1), ts)
+        h = self.up1(torch.cat((h, h1), dim=1), ts)
+        h = self.up0(torch.cat((h, h0), dim=1), ts)
+
+        h = self.proj(h)
 
         return h
 

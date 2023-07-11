@@ -74,8 +74,8 @@ def main(on_gpu=True):
     test_dataloader = DataLoader(test_data, batch_size=64, shuffle=True)
 
     model = Model()
-    # model.load_state_dict(torch.load(MODEL_PATH.joinpath(os.listdir(MODEL_PATH, )[-1])))
-    learning_rate = 1e-4
+    model.load_state_dict(torch.load(MODEL_PATH.joinpath(os.listdir(MODEL_PATH, )[-1])))
+    learning_rate = 5e-6
     loss_fn = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     epochs = 500
