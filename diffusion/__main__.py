@@ -57,18 +57,25 @@ def test_loop(dataloader, model: Model, loss_fn, device):
 def main(on_gpu=True):
     device = "cuda" if on_gpu and torch.cuda.is_available() else "cpu"
 
-    training_data = datasets.CIFAR10(
+    crop_size = (178, 178)
+    size = (32, 32)
+
+    training_data = datasets.CelebA(
         root=DATA_PATH,
-        train=True,
+        split="train",
         transform=transforms.Compose([
+            transforms.CenterCrop(crop_size),
+            transforms.Resize(size),
             transforms.ToTensor()
         ]),
         download=True
     )
-    test_data = datasets.CIFAR10(
+    test_data = datasets.CelebA(
         root=DATA_PATH,
-        train=False,
+        split="test",
         transform=transforms.Compose([
+            transforms.CenterCrop(crop_size),
+            transforms.Resize(size),
             transforms.ToTensor()
         ]),
         download=True
