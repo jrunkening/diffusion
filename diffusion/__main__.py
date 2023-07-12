@@ -57,16 +57,22 @@ def test_loop(dataloader, model: Model, loss_fn, device):
 def main(on_gpu=True):
     device = "cuda" if on_gpu and torch.cuda.is_available() else "cpu"
 
-    training_data = datasets.MNIST(
+    training_data = datasets.CelebA(
         root=DATA_PATH,
-        train=True,
-        transform=transforms.ToTensor(),
+        split="train",
+        transform=transforms.Compose([
+            transforms.CenterCrop((208, 176)),
+            transforms.ToTensor()
+        ]),
         download=True
     )
-    test_data = datasets.MNIST(
+    test_data = datasets.CelebA(
         root=DATA_PATH,
-        train=False,
-        transform=transforms.ToTensor(),
+        split="test",
+        transform=transforms.Compose([
+            transforms.CenterCrop((208, 176)),
+            transforms.ToTensor()
+        ]),
         download=True
     )
 
@@ -74,8 +80,8 @@ def main(on_gpu=True):
     test_dataloader = DataLoader(test_data, batch_size=64, shuffle=True)
 
     model = Model()
-    # model.load_state_dict(torch.load(MODEL_PATH.joinpath(os.listdir(MODEL_PATH, )[-1])))
-    learning_rate = 1e-4
+    model.load_state_dict(torch.load(MODEL_PATH.joinpath(os.listdir(MODEL_PATH, )[-1])))
+    learning_rate = 5e-5
     loss_fn = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     epochs = 500
