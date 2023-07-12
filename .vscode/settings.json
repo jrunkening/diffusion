@@ -9,6 +9,7 @@
         "oneminus",
         "optim",
         "pyplot",
+        "randn",
         "torchvision"
     ]
 }

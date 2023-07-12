@@ -59,20 +59,16 @@ def main(on_gpu=True):
 
     training_data = datasets.CIFAR10(
         root=DATA_PATH,
-        # split="train",
         train=True,
         transform=transforms.Compose([
-            # transforms.CenterCrop((208, 176)),
             transforms.ToTensor()
         ]),
         download=True
     )
     test_data = datasets.CIFAR10(
         root=DATA_PATH,
-        # split="test",
         train=False,
         transform=transforms.Compose([
-            # transforms.CenterCrop((208, 176)),
             transforms.ToTensor()
         ]),
         download=True
