@@ -92,13 +92,13 @@ class Model(nn.Module):
 
         self.down0 = ResBlock(self.channels[0], self.channels[1], self.activate, "down")
         self.down1 = ResBlock(self.channels[1], self.channels[2], self.activate, "down")
-        self.down2 = ResBlock(self.channels[2], self.channels[3], self.activate, "down", is_pool=True)
-        self.down3 = ResBlock(self.channels[3], self.channels[4], self.activate, "down", is_pool=True)
+        self.down2 = ResBlock(self.channels[2], self.channels[3], self.activate, "down")
+        self.down3 = ResBlock(self.channels[3], self.channels[4], self.activate, "down")
 
         self.attention = SelfAttention(self.channels[4], self.channels[4])
 
-        self.up3 = ResBlock(2*self.channels[4], self.channels[3], self.activate, "up", is_pool=True)
-        self.up2 = ResBlock(2*self.channels[3], self.channels[2], self.activate, "up", is_pool=True)
+        self.up3 = ResBlock(2*self.channels[4], self.channels[3], self.activate, "up")
+        self.up2 = ResBlock(2*self.channels[3], self.channels[2], self.activate, "up")
         self.up1 = ResBlock(2*self.channels[2], self.channels[1], self.activate, "up")
         self.up0 = ResBlock(2*self.channels[1], self.channels[0], self.activate, "up")
 
@@ -130,22 +130,26 @@ class Model(nn.Module):
         return h
 
     def prev(self, image, t):
-        t = torch.tensor(t).reshape(1)
+        device = image.device
 
-        alpha = self.noise_scheduler.alphas[t]
-        sqrt_oneminus_alpha_bar = self.noise_scheduler.sqrt_oneminus_alpha_bar_s[t]
-        sigma = self.noise_scheduler.sigmas[t]
+        t = torch.tensor(t, device=device).reshape(1)
+        alpha = self.noise_scheduler.alphas.to(device)[t]
+        sqrt_oneminus_alpha_bar = self.noise_scheduler.sqrt_oneminus_alpha_bar_s.to(device)[t]
+        sigma = self.noise_scheduler.sigmas.to(device)[t]
 
-        return (
-            image - ((1 - alpha) / sqrt_oneminus_alpha_bar) * self(image, t).detach()
-        ) / torch.sqrt(alpha) + sigma * torch.randn_like(image)
+        noise_scale = ((1 - alpha) / sqrt_oneminus_alpha_bar)
+        noise = self(image, t).detach()
+        normalize_scale = torch.sqrt(alpha)
+        perturb = sigma * torch.randn_like(image)
+
+        return (image - noise_scale * noise) / normalize_scale + perturb
 
     def infer(self, ch, h, w):
-        image = torch.randn(1, ch, h, w)
+        image = torch.randn(1, ch, h, w, device=next(self.parameters()).device)
         for i in range(self.noise_scheduler.steps-1, 0, -1):
             image = self.prev(image, i)
         image = image.reshape(ch, h, w).permute(1, 2, 0)
         image -= torch.min(image)
         image /= torch.max(image)
 
-        return image
+        return image.to("cpu")

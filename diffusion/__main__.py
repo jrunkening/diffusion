@@ -57,20 +57,22 @@ def test_loop(dataloader, model: Model, loss_fn, device):
 def main(on_gpu=True):
     device = "cuda" if on_gpu and torch.cuda.is_available() else "cpu"
 
-    training_data = datasets.CelebA(
+    training_data = datasets.CIFAR10(
         root=DATA_PATH,
-        split="train",
+        # split="train",
+        train=True,
         transform=transforms.Compose([
-            transforms.CenterCrop((208, 176)),
+            # transforms.CenterCrop((208, 176)),
             transforms.ToTensor()
         ]),
         download=True
     )
-    test_data = datasets.CelebA(
+    test_data = datasets.CIFAR10(
         root=DATA_PATH,
-        split="test",
+        # split="test",
+        train=False,
         transform=transforms.Compose([
-            transforms.CenterCrop((208, 176)),
+            # transforms.CenterCrop((208, 176)),
             transforms.ToTensor()
         ]),
         download=True
@@ -81,7 +83,7 @@ def main(on_gpu=True):
 
     model = Model()
     model.load_state_dict(torch.load(MODEL_PATH.joinpath(os.listdir(MODEL_PATH, )[-1])))
-    learning_rate = 5e-5
+    learning_rate = 1e-4
     loss_fn = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     epochs = 500
